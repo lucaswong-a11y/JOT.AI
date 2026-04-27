@@ -41,6 +41,16 @@ const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState('Meetings');
   const [error, setError] = useState<string | null>(null);
   const [interimText, setInterimText] = useState('');
+  const [exportReady, setExportReady] = useState(false);
+  const [audioBlobUrl, setAudioBlobUrl] = useState<string | null>(null);
+  const [audioMimeType, setAudioMimeType] = useState('audio/webm');
+
+  const cleanupAudioUrl = () => {
+    if (audioBlobUrl) {
+      URL.revokeObjectURL(audioBlobUrl);
+      setAudioBlobUrl(null);
+    }
+  };
   
   // --- Mic Test State ---
   const [isTestingMic, setIsTestingMic] = useState(false);
@@ -52,6 +62,9 @@ const App: React.FC = () => {
 
   // --- Refs ---
   const recognitionRef = useRef<SpeechRecognition | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedChunksRef = useRef<BlobPart[]>([]);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
   const timerRef = useRef<number | null>(null);
   const activeSessionRef = useRef<MeetingSession | null>(null);
   const isRecordingRef = useRef(false);
@@ -59,6 +72,19 @@ const App: React.FC = () => {
   useEffect(() => {
     activeSessionRef.current = activeSession;
   }, [activeSession]);
+
+  useEffect(() => {
+    setExportReady(false);
+    cleanupAudioUrl();
+    recordedChunksRef.current = [];
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+    }
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach(track => track.stop());
+      mediaStreamRef.current = null;
+    }
+  }, [activeSession?.id]);
 
   // --- Recording Timer ---
   useEffect(() => {
@@ -117,21 +143,153 @@ const App: React.FC = () => {
     setActiveSession(newSession);
     setActiveTab('Meetings');
     setError(null);
+    setExportReady(false);
+    cleanupAudioUrl();
   };
 
-  const stopRecording = useCallback(() => {
+  const stopAudioRecorder = () => {
+    return new Promise<void>((resolve) => {
+      if (!mediaRecorderRef.current) {
+        if (mediaStreamRef.current) {
+          mediaStreamRef.current.getTracks().forEach(track => track.stop());
+          mediaStreamRef.current = null;
+        }
+        resolve();
+        return;
+      }
+
+      const recorder = mediaRecorderRef.current;
+      const originalOnStop = recorder.onstop;
+      recorder.onstop = (event) => {
+        if (originalOnStop) originalOnStop.call(recorder, event as any);
+        if (mediaStreamRef.current) {
+          mediaStreamRef.current.getTracks().forEach(track => track.stop());
+          mediaStreamRef.current = null;
+        }
+        resolve();
+      };
+
+      if (recorder.state !== 'inactive') {
+        recorder.stop();
+      } else {
+        resolve();
+      }
+    });
+  };
+
+  const stopRecording = useCallback(async () => {
     isRecordingRef.current = false;
     if (recognitionRef.current) {
       recognitionRef.current.stop();
     }
+    await stopAudioRecorder();
     setIsRecording(false);
     setInterimText('');
+    setExportReady(recordedChunksRef.current.length > 0);
     
     const current = activeSessionRef.current;
     if (current) {
       setSessions(prev => prev.map(s => s.id === current.id ? current : s));
     }
   }, []);
+
+  const getTranscriptText = (session: MeetingSession) => {
+    const metadata = [
+      `Title: ${session.title}`,
+      `Date: ${new Date(session.date).toLocaleDateString()}`,
+      `Venue: ${session.venue || 'Not specified'}`,
+      `Agenda: ${session.agenda || 'Not specified'}`,
+      `Attendance: ${session.attendance || 'Not specified'}`,
+      '',
+      'Transcription:',
+      ''
+    ].join('\n');
+
+    const transcript = session.transcription.map(segment => {
+      const time = new Date(segment.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      return `[${time}] ${segment.speaker}: ${segment.text}`;
+    }).join('\n');
+
+    const notes = session.notes ? `\n\nNotes:\n${session.notes}\n` : '\n';
+    return `${metadata}${transcript}${notes}`;
+  };
+
+  const downloadBlob = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    link.style.display = 'none';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const downloadTranscriptTxt = () => {
+    if (!activeSession) return;
+    const text = getTranscriptText(activeSession);
+    downloadBlob(new Blob([text], { type: 'text/plain;charset=utf-8' }), `${activeSession.title || 'transcript'}.txt`);
+  };
+
+  const createPDFBlob = (content: string) => {
+    const lines = content.split('\n').flatMap(line => {
+      const width = 90;
+      return line.length <= width ? [line] : line.match(new RegExp(`.{1,${width}}`, 'g')) || [];
+    });
+    const escapedLines = lines.map(line => line.replace(/([()\\])/g, '\\$1'));
+    const streamLines = ['BT', '/F1 12 Tf', '1 14 TL', '50 780 Td', ...escapedLines.map((line, index) => `${index === 0 ? '' : 'T*'} (${line}) Tj`), 'ET'];
+    const streamBody = streamLines.filter(Boolean).join('\n');
+    const encoder = new TextEncoder();
+    const streamLength = encoder.encode(streamBody).length;
+    const objects = [
+      '%PDF-1.3\n',
+      '1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n',
+      '2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n',
+      '3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj\n',
+      `4 0 obj << /Length ${streamLength} >> stream\n${streamBody}\nendstream endobj\n`,
+      '5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n'
+    ];
+    let offset = 0;
+    const xrefPositions = [0];
+    for (const obj of objects) {
+      xrefPositions.push(offset);
+      offset += encoder.encode(obj).length;
+    }
+    const body = objects.join('');
+    const xref = ['xref', '0 6', '0000000000 65535 f'];
+    xrefPositions.slice(1).forEach(pos => xref.push(pos.toString().padStart(10, '0') + ' 00000 n'));
+    const trailer = `trailer << /Size 6 /Root 1 0 R >>\nstartxref\n${offset}\n%%EOF`;
+    return new Blob([body + xref.join('\n') + '\n' + trailer], { type: 'application/pdf' });
+  };
+
+  const downloadTranscriptPdf = () => {
+    if (!activeSession) return;
+    const text = getTranscriptText(activeSession);
+    downloadBlob(createPDFBlob(text), `${activeSession.title || 'transcript'}.pdf`);
+  };
+
+  const downloadTranscriptDocx = () => {
+    if (!activeSession) return;
+    const text = getTranscriptText(activeSession)
+      .split('\n')
+      .map(line => line === '' ? '<br/>' : `${line}<br/>`)
+      .join('');
+    const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"></head><body>${text}</body></html>`;
+    downloadBlob(new Blob([html], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }), `${activeSession.title || 'transcript'}.docx`);
+  };
+
+  const downloadAudioFile = () => {
+    if (recordedChunksRef.current.length === 0) return;
+    const blob = new Blob(recordedChunksRef.current, { type: audioMimeType });
+    const extension = audioMimeType.includes('mp3') ? 'mp3' : audioMimeType.includes('ogg') ? 'ogg' : 'webm';
+    downloadBlob(blob, `${activeSession?.title || 'meeting-audio'}.${extension}`);
+  };
+
+  const handleDownloadAudio = () => {
+    if (recordedChunksRef.current.length === 0) return;
+    downloadAudioFile();
+  };
 
   const handleSummary = async () => {
     const sessionToAnalyze = activeSessionRef.current;
@@ -180,6 +338,44 @@ const App: React.FC = () => {
     }
 
     try {
+      cleanupAudioUrl();
+      recordedChunksRef.current = [];
+      // start audio capture
+      if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+        const constraints = { audio: settings.microphoneId === 'default' ? true : { deviceId: { exact: settings.microphoneId } } };
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        mediaStreamRef.current = stream;
+        const mimeType = MediaRecorder.isTypeSupported('audio/mp3')
+          ? 'audio/mp3'
+          : MediaRecorder.isTypeSupported('audio/mpeg')
+          ? 'audio/mpeg'
+          : MediaRecorder.isTypeSupported('audio/webm')
+          ? 'audio/webm'
+          : MediaRecorder.isTypeSupported('audio/ogg')
+          ? 'audio/ogg'
+          : '';
+
+        if (mimeType) {
+          setAudioMimeType(mimeType);
+          try {
+            recordedChunksRef.current = [];
+            const recorder = new MediaRecorder(stream, { mimeType });
+            recorder.ondataavailable = (event) => {
+              if (event.data.size > 0) recordedChunksRef.current.push(event.data);
+            };
+            recorder.onstop = () => {
+              const blob = new Blob(recordedChunksRef.current, { type: mimeType });
+              const url = URL.createObjectURL(blob);
+              setAudioBlobUrl(url);
+            };
+            mediaRecorderRef.current = recorder;
+            recorder.start();
+          } catch (recErr) {
+            console.warn('Audio recording is not supported with this format.', recErr);
+          }
+        }
+      }
+
       const recognition = new SpeechRecognition() as SpeechRecognition;
       recognition.continuous = true;
       recognition.interimResults = true;
@@ -230,6 +426,8 @@ const App: React.FC = () => {
       isRecordingRef.current = true;
       recognition.start();
       setIsRecording(true);
+      setExportReady(false);
+      setAudioBlobUrl(null);
       
     } catch (err) {
       console.error("Failed to start recognition:", err);
@@ -348,7 +546,12 @@ const App: React.FC = () => {
               <div className="flex-1 overflow-y-auto custom-scrollbar px-3 space-y-1">
                 <div className="px-3 py-2 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Recent</div>
                 {filteredSessions.map(session => (
-                  <div key={session.id} onClick={() => !isSummarizing && setActiveSession(session)} className={`group flex items-center justify-between p-2.5 rounded-lg cursor-pointer transition-all ${activeSession?.id === session.id ? 'bg-white shadow-sm border border-slate-100 text-slate-900' : 'text-slate-500 hover:bg-slate-200/50'} ${isSummarizing ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                  <div key={session.id} onClick={() => {
+                    if (isSummarizing) return;
+                    setActiveSession(session);
+                    setExportReady(false);
+                    setAudioBlobUrl(null);
+                  }} className={`group flex items-center justify-between p-2.5 rounded-lg cursor-pointer transition-all ${activeSession?.id === session.id ? 'bg-white shadow-sm border border-slate-100 text-slate-900' : 'text-slate-500 hover:bg-slate-200/50'} ${isSummarizing ? 'opacity-50 cursor-not-allowed' : ''}`}>
                     <div className="flex flex-col overflow-hidden">
                       <span className="text-xs font-bold truncate">{session.title}</span>
                       <span className="text-[10px] opacity-60">{new Date(session.date).toLocaleDateString()}</span>
@@ -381,7 +584,10 @@ const App: React.FC = () => {
                     </div>
                     <div className="flex items-center gap-3">
                       {isRecording ? (
-                        <button onClick={endMeetingAndAnalyze} className="flex items-center gap-2 px-5 py-2 rounded-full text-xs font-bold transition-all bg-red-500 text-white recording-indicator shadow-lg shadow-red-100"><Square className="w-3 h-3 fill-current" /> End & Analyze</button>
+                        <>
+                          <button onClick={stopRecording} className="flex items-center gap-2 px-5 py-2 rounded-full text-xs font-bold transition-all bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-50"><Square className="w-3 h-3" /> Stop Recording</button>
+                          <button onClick={endMeetingAndAnalyze} className="flex items-center gap-2 px-5 py-2 rounded-full text-xs font-bold transition-all bg-red-500 text-white recording-indicator shadow-lg shadow-red-100"><Square className="w-3 h-3 fill-current" /> End & Analyze</button>
+                        </>
                       ) : !isNewMeeting && (
                         <button onClick={() => setShowLanguageModal(true)} disabled={isSummarizing} className="flex items-center gap-2 px-5 py-2 rounded-full text-xs font-bold transition-all bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-50"><Mic className="w-3 h-3" /> Resume</button>
                       )}
@@ -456,6 +662,23 @@ const App: React.FC = () => {
                               </div>
                             )}
                             {isRecording && <div className="flex items-center gap-3 pl-1"><div className="flex gap-1">{[0, 1, 2].map(i => <motion.div key={i} animate={{ height: [4, 12, 4] }} transition={{ repeat: Infinity, duration: 0.6, delay: i * 0.1 }} className="w-1 bg-indigo-400 rounded-full" />)}</div><span className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest">Listening</span></div>}
+                          </div>
+                            {exportReady && !isRecording && (
+                              <div className="mt-8 rounded-3xl border border-slate-200 bg-slate-50 p-6">
+                                <div className="flex items-center justify-between mb-4">
+                                  <div>
+                                    <p className="text-sm font-bold text-slate-900">Export your session</p>
+                                    <p className="text-xs text-slate-500">Download transcript and audio after stopping recording.</p>
+                                  </div>
+                                </div>
+                                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                                  <button onClick={downloadTranscriptTxt} className="w-full rounded-2xl bg-white border border-slate-200 px-4 py-3 text-left text-xs font-bold text-slate-700 hover:border-slate-300">Download TXT</button>
+                                  <button onClick={downloadTranscriptPdf} className="w-full rounded-2xl bg-white border border-slate-200 px-4 py-3 text-left text-xs font-bold text-slate-700 hover:border-slate-300">Download PDF</button>
+                                  <button onClick={downloadTranscriptDocx} className="w-full rounded-2xl bg-white border border-slate-200 px-4 py-3 text-left text-xs font-bold text-slate-700 hover:border-slate-300">Download DOCX</button>
+                                  <button onClick={handleDownloadAudio} disabled={!audioBlobUrl} className="w-full rounded-2xl bg-white border border-slate-200 px-4 py-3 text-left text-xs font-bold text-slate-700 hover:border-slate-300 disabled:opacity-40 disabled:cursor-not-allowed">Download Audio {audioMimeType.includes('mp3') ? '(MP3)' : ''}</button>
+                                </div>
+                              </div>
+                            )}
                           </div>
                         )}
                       </div>
