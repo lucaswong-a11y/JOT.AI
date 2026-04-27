@@ -1,57 +1,78 @@
 
 import { GoogleGenAI } from '@google/genai';
+import { GoogleAuth } from 'google-auth-library';
+import { getVercelOidcToken } from '@vercel/oidc';
+import { writeFileSync } from 'fs';
 
 /**
  * Vercel Serverless Function (Node.js)
- * Acts as a proxy to the Gemini API to bypass geo-blocking in regions like Hong Kong.
+ * Securely connects to Google Cloud Vertex AI using Keyless Workload Identity Federation (WIF).
  */
 export default async function handler(req: any, res: any) {
-  // Only allow POST requests for security
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method Not Allowed' });
   }
 
   try {
     const { contents, config, model } = req.body;
-
     if (!contents) {
       return res.status(400).json({ error: 'Missing contents in request body' });
     }
 
-    // Initialize the SDK securely on the server side
-    // Vercel environment variables are accessed via process.env
-    const apiKey = process.env.API_KEY || process.env.VITE_GEMINI_API_KEY;
-    
-    if (!apiKey) {
-      return res.status(500).json({ error: 'API Key not configured on server' });
+    const projectNumber = process.env.GCP_PROJECT_NUMBER;
+    const serviceAccountEmail = process.env.GCP_SERVICE_ACCOUNT_EMAIL;
+    const projectId = process.env.GCP_PROJECT_ID;
+
+    if (!projectNumber || !serviceAccountEmail || !projectId) {
+      return res.status(500).json({ error: 'Server configuration error: Missing GCP WIF environment variables.' });
     }
 
-    const ai = new GoogleGenAI({ 
-      apiKey: apiKey, 
-      vertexai: true 
+    const oidcToken = await getVercelOidcToken();
+    const tokenPath = '/tmp/oidc-token.txt';
+    writeFileSync(tokenPath, oidcToken);
+
+    const credentials = {
+      type: 'external_account',
+      audience: `//iam.googleapis.com/projects/${projectNumber}/locations/global/workloadIdentityPools/vercel-pool/providers/vercel-provider`,
+      subject_token_type: 'urn:ietf:params:oauth:token-type:jwt',
+      token_url: 'https://sts.googleapis.com/v1/token',
+      service_account_impersonation_url: `https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${serviceAccountEmail}:generateAccessToken`,
+      credential_source: {
+        file: tokenPath,
+      },
+    };
+
+    const auth = new GoogleAuth({
+      credentials,
+      scopes: ['https://www.googleapis.com/auth/cloud-platform'],
     });
 
-    // Call the Gemini model (gemini-2.5-flash is the current high-performance standard)
+    const ai = new GoogleGenAI({
+      vertexai: {
+        project: projectId,
+        location: process.env.GOOGLE_CLOUD_LOCATION || 'us-central1',
+      },
+      authClient: auth,
+    });
+
     const response = await ai.models.generateContent({
       model: model || 'gemini-2.5-flash',
       contents,
       config: {
         ...config,
-        systemInstruction: config?.systemInstruction || 'You are a professional assistant.'
+        systemInstruction: config?.systemInstruction || 'You are a professional assistant.',
       },
     });
 
-    // Return the generated text as a clean JSON response
-    return res.status(200).json({ 
+    return res.status(200).json({
       text: response.text,
-      candidates: response.candidates 
+      candidates: response.candidates,
     });
-
   } catch (error: any) {
-    console.error('Gemini Backend Proxy Error:', error);
-    return res.status(500).json({ 
-      error: 'Failed to generate content from AI provider', 
-      details: error.message 
+    console.error('Vertex AI Backend Proxy Error:', error);
+    return res.status(500).json({
+      error: 'Failed to generate content from AI provider',
+      details: error.message,
     });
   }
 }

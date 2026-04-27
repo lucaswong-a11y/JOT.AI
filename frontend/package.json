@@ -9,14 +9,16 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@vercel/oidc": "^3.2.1",
+    "clsx": "latest",
+    "d3": "latest",
+    "framer-motion": "latest",
+    "google-auth-library": "^10.6.2",
+    "lucide-react": "latest",
     "react": "latest",
     "react-dom": "latest",
-    "lucide-react": "latest",
-    "framer-motion": "latest",
-    "clsx": "latest",
-    "tailwind-merge": "latest",
     "recharts": "latest",
-    "d3": "latest"
+    "tailwind-merge": "latest"
   },
   "devDependencies": {
     "@types/node": "latest",

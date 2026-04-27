@@ -51,3 +51,34 @@ To install dependencies and run your Google Cloud Vertex AI Studio App locally, 
 
 ```bash
 npm install && npm run dev
+```
+
+## Vercel Deployment with Keyless Authentication
+
+This project uses **Workload Identity Federation (WIF)** for secure, keyless authentication to Google Cloud Vertex AI.
+
+### Required Environment Variables for Vercel
+
+When deploying to Vercel, configure the following environment variables in your Vercel project settings:
+
+| Variable | Description | Example |
+|---|---|---|
+| `GCP_PROJECT_ID` | Your Google Cloud Project ID | `gen-lang-client-0744516673` |
+| `GCP_PROJECT_NUMBER` | Your Google Cloud Project Number | `1234567890` |
+| `GCP_SERVICE_ACCOUNT_EMAIL` | Service Account email for WIF impersonation | `jot-vercel-backend@your-project.iam.gserviceaccount.com` |
+| `GOOGLE_CLOUD_LOCATION` | Vertex AI deployment region (optional) | `us-central1` (default) |
+
+### Setup Steps
+
+1. **Configure WIF in Google Cloud**: Set up Workload Identity Federation with Vercel as the external identity provider.
+2. **Create Service Account**: Create a service account with appropriate Vertex AI access.
+3. **Link to Vercel**: Connect the service account to your Vercel environment.
+4. **Set Environment Variables**: Add the variables listed above to your Vercel project dashboard.
+
+### Local Development Note
+
+⚠️ **Important**: Local development (`npm run dev`) cannot directly execute `api/generate.ts` because it requires Vercel OIDC tokens, which are only available in the Vercel serverless environment.
+
+For local testing:
+- Use a separate backend (see `backend/` directory) with traditional authentication, or
+- Deploy to Vercel staging to test the WIF integration
