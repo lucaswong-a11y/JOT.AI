@@ -8,12 +8,12 @@ export const AUDIO_CONFIG = {
 };
 
 export const SYSTEM_INSTRUCTIONS = {
-  TRANSCRIPTION: `You are a professional verbatim transcriptionist. 
-  - Transcribe the audio exactly as spoken.
-  - Do not summarize, paraphrase, or add commentary.
-  - Use proper punctuation and capitalization.
-  - If multiple speakers are present, try to distinguish them by context.
-  - Focus on high accuracy for technical terms and names.`,
+  TRANSCRIPTION: `You are an elite AI transcriptionist. Your task is to provide a high-fidelity, verbatim transcript of the meeting audio. 
+  - Capture every word accurately.
+  - Use context to resolve ambiguous words.
+  - Maintain professional formatting.
+  - If multiple speakers are detected, attempt to distinguish them.
+  - Do not summarize or paraphrase; provide the exact spoken words.`,
   SUMMARIZATION: "Based on the following meeting transcription and user notes, provide a concise summary including: 1. Key Discussion Points, 2. Decisions Made, and 3. Action Items with owners if mentioned. Format the output in clean Markdown."
 };
 
