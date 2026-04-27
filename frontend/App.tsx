@@ -44,13 +44,6 @@ const App: React.FC = () => {
   const [exportReady, setExportReady] = useState(false);
   const [audioBlobUrl, setAudioBlobUrl] = useState<string | null>(null);
   const [audioMimeType, setAudioMimeType] = useState('audio/webm');
-
-  const cleanupAudioUrl = () => {
-    if (audioBlobUrl) {
-      URL.revokeObjectURL(audioBlobUrl);
-      setAudioBlobUrl(null);
-    }
-  };
   
   // --- Mic Test State ---
   const [isTestingMic, setIsTestingMic] = useState(false);
@@ -75,7 +68,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     setExportReady(false);
-    cleanupAudioUrl();
+    setAudioBlobUrl(null);
     recordedChunksRef.current = [];
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       mediaRecorderRef.current.stop();
@@ -144,48 +137,28 @@ const App: React.FC = () => {
     setActiveTab('Meetings');
     setError(null);
     setExportReady(false);
-    cleanupAudioUrl();
+    setAudioBlobUrl(null);
   };
 
   const stopAudioRecorder = () => {
-    return new Promise<void>((resolve) => {
-      if (!mediaRecorderRef.current) {
-        if (mediaStreamRef.current) {
-          mediaStreamRef.current.getTracks().forEach(track => track.stop());
-          mediaStreamRef.current = null;
-        }
-        resolve();
-        return;
-      }
-
-      const recorder = mediaRecorderRef.current;
-      const originalOnStop = recorder.onstop;
-      recorder.onstop = (event) => {
-        if (originalOnStop) originalOnStop.call(recorder, event as any);
-        if (mediaStreamRef.current) {
-          mediaStreamRef.current.getTracks().forEach(track => track.stop());
-          mediaStreamRef.current = null;
-        }
-        resolve();
-      };
-
-      if (recorder.state !== 'inactive') {
-        recorder.stop();
-      } else {
-        resolve();
-      }
-    });
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+    }
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach(track => track.stop());
+      mediaStreamRef.current = null;
+    }
   };
 
-  const stopRecording = useCallback(async () => {
+  const stopRecording = useCallback(() => {
     isRecordingRef.current = false;
     if (recognitionRef.current) {
       recognitionRef.current.stop();
     }
-    await stopAudioRecorder();
+    stopAudioRecorder();
     setIsRecording(false);
     setInterimText('');
-    setExportReady(recordedChunksRef.current.length > 0);
+    setExportReady(true);
     
     const current = activeSessionRef.current;
     if (current) {
@@ -219,10 +192,7 @@ const App: React.FC = () => {
     const link = document.createElement('a');
     link.href = url;
     link.download = filename;
-    link.style.display = 'none';
-    document.body.appendChild(link);
     link.click();
-    document.body.removeChild(link);
     URL.revokeObjectURL(url);
   };
 
@@ -238,7 +208,7 @@ const App: React.FC = () => {
       return line.length <= width ? [line] : line.match(new RegExp(`.{1,${width}}`, 'g')) || [];
     });
     const escapedLines = lines.map(line => line.replace(/([()\\])/g, '\\$1'));
-    const streamLines = ['BT', '/F1 12 Tf', '1 14 TL', '50 780 Td', ...escapedLines.map((line, index) => `${index === 0 ? '' : 'T*'} (${line}) Tj`), 'ET'];
+    const streamLines = ['BT', '/F1 12 Tf', '50 780 Td', ...escapedLines.map((line, index) => `${index === 0 ? '' : 'T*'} (${line}) Tj`), 'ET'];
     const streamBody = streamLines.filter(Boolean).join('\n');
     const encoder = new TextEncoder();
     const streamLength = encoder.encode(streamBody).length;
@@ -276,18 +246,18 @@ const App: React.FC = () => {
       .map(line => line === '' ? '<br/>' : `${line}<br/>`)
       .join('');
     const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"></head><body>${text}</body></html>`;
-    downloadBlob(new Blob([html], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }), `${activeSession.title || 'transcript'}.docx`);
+    downloadBlob(new Blob([html], { type: 'application/msword' }), `${activeSession.title || 'transcript'}.docx`);
   };
 
   const downloadAudioFile = () => {
-    if (recordedChunksRef.current.length === 0) return;
+    if (!audioBlobUrl || !mediaRecorderRef.current) return;
     const blob = new Blob(recordedChunksRef.current, { type: audioMimeType });
     const extension = audioMimeType.includes('mp3') ? 'mp3' : audioMimeType.includes('ogg') ? 'ogg' : 'webm';
     downloadBlob(blob, `${activeSession?.title || 'meeting-audio'}.${extension}`);
   };
 
   const handleDownloadAudio = () => {
-    if (recordedChunksRef.current.length === 0) return;
+    if (!audioBlobUrl && !recordedChunksRef.current.length) return;
     downloadAudioFile();
   };
 
@@ -338,8 +308,6 @@ const App: React.FC = () => {
     }
 
     try {
-      cleanupAudioUrl();
-      recordedChunksRef.current = [];
       // start audio capture
       if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
         const constraints = { audio: settings.microphoneId === 'default' ? true : { deviceId: { exact: settings.microphoneId } } };
@@ -546,12 +514,7 @@ const App: React.FC = () => {
               <div className="flex-1 overflow-y-auto custom-scrollbar px-3 space-y-1">
                 <div className="px-3 py-2 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Recent</div>
                 {filteredSessions.map(session => (
-                  <div key={session.id} onClick={() => {
-                    if (isSummarizing) return;
-                    setActiveSession(session);
-                    setExportReady(false);
-                    setAudioBlobUrl(null);
-                  }} className={`group flex items-center justify-between p-2.5 rounded-lg cursor-pointer transition-all ${activeSession?.id === session.id ? 'bg-white shadow-sm border border-slate-100 text-slate-900' : 'text-slate-500 hover:bg-slate-200/50'} ${isSummarizing ? 'opacity-50 cursor-not-allowed' : ''}`}>
+                  <div key={session.id} onClick={() => !isSummarizing && setActiveSession(session)} className={`group flex items-center justify-between p-2.5 rounded-lg cursor-pointer transition-all ${activeSession?.id === session.id ? 'bg-white shadow-sm border border-slate-100 text-slate-900' : 'text-slate-500 hover:bg-slate-200/50'} ${isSummarizing ? 'opacity-50 cursor-not-allowed' : ''}`}>
                     <div className="flex flex-col overflow-hidden">
                       <span className="text-xs font-bold truncate">{session.title}</span>
                       <span className="text-[10px] opacity-60">{new Date(session.date).toLocaleDateString()}</span>
@@ -645,7 +608,9 @@ const App: React.FC = () => {
                               <div className="flex items-center gap-2 text-[10px] font-black text-slate-400 uppercase tracking-widest"><MessageSquare className="w-4 h-4" /> Live Transcription</div>
                               {isRecording && <div className="flex items-center gap-2 text-red-500 text-[10px] font-black uppercase tracking-widest"><Clock className="w-3 h-3" /> {formatTime(recordingTime)}</div>}
                             </div>
+                            
                             {error && <div className="bg-red-50 border border-red-100 rounded-xl p-4 flex items-start gap-3 text-red-600 mb-6"><AlertCircle className="w-5 h-5 shrink-0 mt-0.5" /><div className="text-xs font-medium"><p className="font-bold mb-1">System Message</p><p>{error}</p></div></div>}
+                            
                             {activeSession.transcription.map((segment) => (
                               <div key={segment.id} className="flex flex-col items-start">
                                 <div className="flex items-center gap-2 mb-1.5">
@@ -655,14 +620,18 @@ const App: React.FC = () => {
                                 <p className="text-slate-700 leading-relaxed text-sm font-medium pl-1">{segment.text}</p>
                               </div>
                             ))}
+                            
                             {interimText && (
                               <div className="flex flex-col items-start opacity-50">
                                 <div className="flex items-center gap-2 mb-1.5"><span className="text-[9px] font-black uppercase tracking-widest px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">User</span></div>
                                 <p className="text-slate-700 leading-relaxed text-sm font-medium pl-1 italic">{interimText}...</p>
                               </div>
                             )}
+                            
                             {isRecording && <div className="flex items-center gap-3 pl-1"><div className="flex gap-1">{[0, 1, 2].map(i => <motion.div key={i} animate={{ height: [4, 12, 4] }} transition={{ repeat: Infinity, duration: 0.6, delay: i * 0.1 }} className="w-1 bg-indigo-400 rounded-full" />)}</div><span className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest">Listening</span></div>}
-                          </div>
+                            
+                            {/* 💡 修正關鍵：移除了原本卡在這裡的多餘 </div>，讓整個結構保持完整 */}
+                            
                             {exportReady && !isRecording && (
                               <div className="mt-8 rounded-3xl border border-slate-200 bg-slate-50 p-6">
                                 <div className="flex items-center justify-between mb-4">
@@ -679,6 +648,8 @@ const App: React.FC = () => {
                                 </div>
                               </div>
                             )}
+                          </div>
+                        )}
                           </div>
                         )}
                       </div>
