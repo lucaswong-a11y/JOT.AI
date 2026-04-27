@@ -1,0 +1,10 @@
+
+{
+  "name": "jot",
+  "description": "A minimalist, professional meeting assistant providing real-time transcription, AI-powered summaries, and deep usage insights.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "location"
+  ]
+}
