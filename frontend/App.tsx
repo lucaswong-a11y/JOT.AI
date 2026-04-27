@@ -134,13 +134,44 @@ const App: React.FC = () => {
     });
   }, []);
 
-  const stopRecording = useCallback(() => {
+const stopRecording = useCallback(() => {
     isRecordingRef.current = false;
     setIsRecording(false);
     
+    // 1. 斷開音訊處理器
     if (processorRef.current) {
       processorRef.current.disconnect();
       processorRef.current = null;
     }
+
+    // 2. 徹底關閉麥克風硬體 (修正原本斷掉的地方)
     if (streamRef.current) {
-      streamRef.current.getTracks().forEach(t => t.
+      streamRef.current.getTracks().forEach(t => t.stop());
+      streamRef.current = null;
+    }
+
+    // 3. 關閉音訊上下文
+    if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+      audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+
+    // 4. 更新 Session 狀態
+    const current = activeSessionRef.current;
+    if (current) {
+      setSessions(prev => prev.map(s => s.id === current.id ? current : s));
+    }
+  }, []);
+
+  // 這裡補齊 App 元件剩下的渲染邏輯和關閉括號
+  return (
+    <div className="flex h-screen bg-gray-50 overflow-hidden">
+      {/* 這裡應該接著你的 UI 程式碼... 
+          由於你的貼文斷在邏輯處，請確保下方有對應的 return (JSX) 
+          以及元件結尾的 } 和 export default App; */}
+      <h1 className="p-4">JOT.AI 正在運行</h1>
+    </div>
+  );
+};
+
+export default App;
