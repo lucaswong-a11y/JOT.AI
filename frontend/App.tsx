@@ -630,8 +630,6 @@ const App: React.FC = () => {
                             
                             {isRecording && <div className="flex items-center gap-3 pl-1"><div className="flex gap-1">{[0, 1, 2].map(i => <motion.div key={i} animate={{ height: [4, 12, 4] }} transition={{ repeat: Infinity, duration: 0.6, delay: i * 0.1 }} className="w-1 bg-indigo-400 rounded-full" />)}</div><span className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest">Listening</span></div>}
                             
-                            {/* 💡 修正關鍵：移除了原本卡在這裡的多餘 </div>，讓整個結構保持完整 */}
-                            
                             {exportReady && !isRecording && (
                               <div className="mt-8 rounded-3xl border border-slate-200 bg-slate-50 p-6">
                                 <div className="flex items-center justify-between mb-4">
@@ -644,12 +642,10 @@ const App: React.FC = () => {
                                   <button onClick={downloadTranscriptTxt} className="w-full rounded-2xl bg-white border border-slate-200 px-4 py-3 text-left text-xs font-bold text-slate-700 hover:border-slate-300">Download TXT</button>
                                   <button onClick={downloadTranscriptPdf} className="w-full rounded-2xl bg-white border border-slate-200 px-4 py-3 text-left text-xs font-bold text-slate-700 hover:border-slate-300">Download PDF</button>
                                   <button onClick={downloadTranscriptDocx} className="w-full rounded-2xl bg-white border border-slate-200 px-4 py-3 text-left text-xs font-bold text-slate-700 hover:border-slate-300">Download DOCX</button>
-                                  <button onClick={handleDownloadAudio} disabled={!audioBlobUrl} className="w-full rounded-2xl bg-white border border-slate-200 px-4 py-3 text-left text-xs font-bold text-slate-700 hover:border-slate-300 disabled:opacity-40 disabled:cursor-not-allowed">Download Audio {audioMimeType.includes('mp3') ? '(MP3)' : ''}</button>
+                                  <button onClick={handleDownloadAudio} disabled={recordedChunksRef.current.length === 0} className="w-full rounded-2xl bg-white border border-slate-200 px-4 py-3 text-left text-xs font-bold text-slate-700 hover:border-slate-300 disabled:opacity-40 disabled:cursor-not-allowed">Download Audio {audioMimeType.includes('mp3') ? '(MP3)' : ''}</button>
                                 </div>
                               </div>
                             )}
-                          </div>
-                        )}
                           </div>
                         )}
                       </div>
